@@ -1,3 +1,7 @@
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
 """GenBot - GenLayer Telegram Bot entry point."""
 
 import logging
@@ -190,5 +194,20 @@ async def _standalone_file_upload(update, context) -> None:
         )
 
 
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'{"status":"ok","bot":"genbot"}')
+    def log_message(self, *args):
+        pass
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server.serve_forever()
+
+
 if __name__ == "__main__":
+    threading.Thread(target=start_health_server, daemon=True).start()
     main()
