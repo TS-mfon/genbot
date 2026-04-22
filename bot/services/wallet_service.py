@@ -1,14 +1,34 @@
 """Embedded wallet service with Fernet encryption."""
 
-import hashlib
 import logging
-import secrets
 from typing import Optional
 
 from bot.db.database import get_db
 from bot.utils.encryption import encrypt_data, decrypt_data
 
 logger = logging.getLogger(__name__)
+
+
+def _create_eth_account():
+    """Create an Ethereum-compatible account.
+
+    Uses eth_account if available, falls back to secrets-based generation.
+    """
+    try:
+        from eth_account import Account
+        acct = Account.create()
+        return {
+            "address": acct.address,
+            "private_key": acct.key.hex() if isinstance(acct.key, bytes) else acct.key,
+        }
+    except ImportError:
+        import hashlib
+        import secrets
+        private_key_bytes = secrets.token_bytes(32)
+        private_key = "0x" + private_key_bytes.hex()
+        address_hash = hashlib.sha256(private_key_bytes).hexdigest()
+        address = "0x" + address_hash[:40]
+        return {"address": address, "private_key": private_key}
 
 
 class WalletService:
@@ -38,13 +58,9 @@ class WalletService:
 
     async def _create_wallet(self, user_id: int) -> dict:
         """Generate a new wallet for a user."""
-        # Generate a deterministic-looking but random private key
-        private_key_bytes = secrets.token_bytes(32)
-        private_key = "0x" + private_key_bytes.hex()
-
-        # Derive address from private key (simplified - hash-based)
-        address_hash = hashlib.sha256(private_key_bytes).hexdigest()
-        address = "0x" + address_hash[:40]
+        acct = _create_eth_account()
+        private_key = acct["private_key"]
+        address = acct["address"]
 
         # Encrypt and store
         encrypted_key = encrypt_data(private_key)

@@ -1,7 +1,9 @@
-"""Start and help command handlers."""
+"""Start and help command handlers with wallet creation."""
 
 from telegram import Update
 from telegram.ext import ContextTypes
+
+from bot.services.wallet_service import wallet_service
 
 WELCOME_TEXT = """
 Welcome to GenBot - Your GenLayer Intelligent Contract Assistant!
@@ -19,6 +21,7 @@ Commands:
   /audit      - AI-powered contract security audit
   /faucet     - Request testnet tokens
   /validators - View validator status
+  /network    - Switch between StudioNet / Bradbury Testnet
   /help       - Show this help message
 
 Get started by deploying a contract with /deploy or grab a template with /template!
@@ -26,8 +29,34 @@ Get started by deploying a contract with /deploy or grab a template with /templa
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle /start command."""
+    """Handle /start command - create wallet and show welcome."""
+    user_id = update.effective_user.id
+
+    # Create or retrieve wallet
+    wallet = await wallet_service.get_or_create_wallet(user_id)
+    is_new = context.user_data.get("wallet_shown") is None
+
     await update.message.reply_text(WELCOME_TEXT)
+
+    if is_new:
+        # Show wallet info with private key (only on first /start)
+        context.user_data["wallet_shown"] = True
+        await update.message.reply_text(
+            f"<b>Your GenLayer Wallet</b>\n\n"
+            f"Address: <code>{wallet['address']}</code>\n\n"
+            f"<b>SAVE YOUR PRIVATE KEY NOW:</b>\n"
+            f"<tg-spoiler>{wallet['private_key']}</tg-spoiler>\n\n"
+            f"Tap the hidden text above to reveal your private key.\n"
+            f"Store it safely - you will need it to manage your account.\n\n"
+            f"Set a password with /password before deploying.",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            f"Wallet: <code>{wallet['address']}</code>",
+            parse_mode="HTML",
+        )
+
     return -1  # ConversationHandler.END
 
 
