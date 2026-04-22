@@ -18,9 +18,7 @@ from bot.handlers.deploy import (
     deploy_handler,
     deploy_code_handler,
     deploy_file_handler,
-    deploy_password_handler,
     DEPLOY_STATE,
-    DEPLOY_PASSWORD_STATE,
 )
 from bot.handlers.call import (
     call_handler,
@@ -60,9 +58,6 @@ def build_conversation_handlers():
             DEPLOY_STATE: [
                 MessageHandler(filters.Document.ALL, deploy_file_handler),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, deploy_code_handler),
-            ],
-            DEPLOY_PASSWORD_STATE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, deploy_password_handler),
             ],
         },
         fallbacks=[CommandHandler("cancel", start_handler)],
