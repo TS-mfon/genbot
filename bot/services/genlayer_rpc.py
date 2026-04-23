@@ -152,7 +152,11 @@ class GenLayerClient:
                 cmd.extend(str(a) for a in args)
 
             logger.info("Deploying user=%s via CLI", user_id)
-            proc = await _run(cmd, timeout=180)
+            # Pipe the keystore password to stdin in case the CLI prompts
+            # (happens on fresh containers without an OS keychain, e.g. Render).
+            # Feed it 3 times because the CLI allows 3 password attempts.
+            pw_stdin = (_KEYSTORE_PASSWORD + "\n") * 3
+            proc = await _run(cmd, timeout=180, stdin_input=pw_stdin)
 
             output = proc.stdout or ""
             stderr = proc.stderr or ""
@@ -257,7 +261,9 @@ class GenLayerClient:
             cmd.append("--args")
             cmd.extend(json.dumps(a) if not isinstance(a, str) else a for a in args)
 
-        proc = await _run(cmd, timeout=120)
+        # Pipe password on stdin in case CLI prompts (Render has no OS keychain)
+        pw_stdin = (_KEYSTORE_PASSWORD + "\n") * 3
+        proc = await _run(cmd, timeout=120, stdin_input=pw_stdin)
         if proc.returncode != 0:
             return {"error": (proc.stderr or proc.stdout)[-800:]}
 
