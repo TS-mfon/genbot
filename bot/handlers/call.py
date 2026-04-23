@@ -213,7 +213,8 @@ async def call_method_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             wallet = await wallet_service.get_or_create_wallet(user_id)
             result = await genlayer_rpc.write_contract(
-                from_address=wallet["address"],
+                user_id=user_id,
+                private_key=wallet["private_key"],
                 contract_address=address,
                 method=method_name,
                 args=args,

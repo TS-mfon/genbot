@@ -113,7 +113,13 @@ async def _validate_and_deploy(
     )
 
     try:
-        result = await genlayer_rpc.deploy_contract(code=code, network=network)
+        wallet = await wallet_service.get_or_create_wallet(user_id)
+        result = await genlayer_rpc.deploy_contract(
+            code=code,
+            user_id=user_id,
+            private_key=wallet["private_key"],
+            network=network,
+        )
 
         if result.get("success"):
             addr = result.get("address", "")

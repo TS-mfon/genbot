@@ -1,12 +1,14 @@
-"""GenLayer client: uses the `genlayer` CLI for deploy/call/write.
+"""GenLayer client: uses the `genlayer` CLI with per-user imported accounts.
 
-The CLI is the officially-supported path. JSON-RPC is used as a thin
-fallback for read-only queries (e.g., transaction lookup).
+The CLI is the officially-supported deployment path. For each deploy, we
+import the user's private key as a named genlayer account, unlock it, run
+the deploy, then clean up.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -21,7 +23,6 @@ from bot.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Network aliases the genlayer CLI accepts
 NETWORK_ALIASES = {
     "studionet": "studionet",
     "testnet": "testnet-asimov",
@@ -31,11 +32,29 @@ NETWORK_ALIASES = {
     "localnet": "localnet",
 }
 
-# Valid contract header prefixes
-VALID_HEADERS = [
-    '# { "Depends": "py-genlayer:test" }',
-    '# {"Depends": "py-genlayer:test"}',
-]
+# Shared password for keystore entries the bot creates. These accounts
+# are ephemeral (removed after each deploy) and the private key material
+# is separately encrypted in SQLite, so the password is a formality.
+_KEYSTORE_PASSWORD = "genbot-ephemeral-password-1234!"
+
+
+def _account_name_for_user(user_id: int) -> str:
+    """Derive a unique genlayer account name from the telegram user_id."""
+    digest = hashlib.sha256(str(user_id).encode()).hexdigest()[:12]
+    return f"tg-{digest}"
+
+
+async def _run(cmd: list[str], timeout: int = 120, stdin_input: str | None = None) -> subprocess.CompletedProcess:
+    """Run a subprocess off the event loop."""
+    logger.debug("Running: %s", " ".join(cmd))
+    return await asyncio.to_thread(
+        subprocess.run,
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        input=stdin_input,
+    )
 
 
 class GenLayerClient:
@@ -43,39 +62,65 @@ class GenLayerClient:
 
     def __init__(self):
         self.rpc_url = settings.genlayer_rpc_url
-        self._current_network: str | None = None
-
-    # ---------------- Network handling ----------------
 
     def resolve_network(self, name: str) -> str:
         return NETWORK_ALIASES.get(name, "studionet")
 
     async def set_network(self, name: str) -> bool:
-        """Run `genlayer network set <alias>`."""
         alias = self.resolve_network(name)
-        proc = await asyncio.to_thread(
-            subprocess.run,
-            ["genlayer", "network", "set", alias],
-            capture_output=True,
-            text=True,
+        proc = await _run(["genlayer", "network", "set", alias], timeout=30)
+        if proc.returncode != 0:
+            logger.warning("network set failed: %s", proc.stderr[:300])
+        return proc.returncode == 0
+
+    async def ensure_account(self, user_id: int, private_key: str) -> str:
+        """Import + unlock the user's private key as a genlayer account.
+
+        Returns the account name. Idempotent: if the account already exists
+        we overwrite it (safe because keystore password is bot-owned).
+        """
+        name = _account_name_for_user(user_id)
+
+        # Import (with --overwrite to keep re-imports safe)
+        proc = await _run(
+            [
+                "genlayer", "account", "import",
+                "--name", name,
+                "--private-key", private_key,
+                "--password", _KEYSTORE_PASSWORD,
+                "--overwrite",
+            ],
             timeout=30,
         )
-        ok = proc.returncode == 0
-        if ok:
-            self._current_network = alias
-        else:
-            logger.warning("network set failed: %s", proc.stderr)
-        return ok
+        if proc.returncode != 0:
+            raise RuntimeError(f"account import failed: {proc.stderr or proc.stdout}")
 
-    # ---------------- Deploy ----------------
+        # Use this account as active
+        await _run(["genlayer", "account", "use", name], timeout=15)
+
+        # Unlock so deploy can sign
+        unlock_proc = await _run(
+            [
+                "genlayer", "account", "unlock",
+                "--account", name,
+                "--password", _KEYSTORE_PASSWORD,
+            ],
+            timeout=30,
+        )
+        if unlock_proc.returncode != 0:
+            logger.warning("unlock returned non-zero: %s", unlock_proc.stderr[:300])
+
+        return name
 
     async def deploy_contract(
         self,
         code: str,
+        user_id: int,
+        private_key: str,
         network: str = "studionet",
         args: list | None = None,
     ) -> dict[str, Any]:
-        """Deploy via the genlayer CLI.
+        """Deploy via the genlayer CLI using the user's private key.
 
         Returns:
             {"success": True, "address": "0x...", "tx_hash": "0x...", "output": "..."}
@@ -86,10 +131,16 @@ class GenLayerClient:
         if not code_stripped.startswith("#"):
             code = '# { "Depends": "py-genlayer:test" }\n' + code
 
-        # Set network
+        # 1. Select network
         await self.set_network(network)
 
-        # Write code to temp file
+        # 2. Import + unlock the user's account
+        try:
+            await self.ensure_account(user_id, private_key)
+        except Exception as e:
+            return {"success": False, "error": f"Failed to prepare account: {e}"}
+
+        # 3. Write code to temp file and deploy
         fd, temp_path = tempfile.mkstemp(suffix=".py", prefix="contract_")
         try:
             with os.fdopen(fd, "w") as f:
@@ -100,45 +151,44 @@ class GenLayerClient:
                 cmd.append("--args")
                 cmd.extend(str(a) for a in args)
 
-            logger.info("Deploying contract via CLI: %s", " ".join(cmd))
+            logger.info("Deploying user=%s via CLI", user_id)
+            proc = await _run(cmd, timeout=180)
 
-            proc = await asyncio.to_thread(
-                subprocess.run,
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=180,
+            output = proc.stdout or ""
+            stderr = proc.stderr or ""
+            combined = output + "\n" + stderr
+
+            logger.info("deploy rc=%s out_bytes=%s err_bytes=%s", proc.returncode, len(output), len(stderr))
+
+            # Parse address/tx hash
+            addr_match = re.search(r"Contract Address['\":]*\s*['\"]?(0x[a-fA-F0-9]{40})", combined)
+            tx_match = re.search(
+                r"(?:Deployment Transaction Hash|Transaction Hash|tx_hash)['\":]*\s*['\"]?(0x[a-fA-F0-9]+)",
+                combined,
+                re.IGNORECASE,
             )
-
-            output = proc.stdout
-            stderr = proc.stderr
-
-            # Parse contract address
-            addr_match = re.search(r"Contract Address:\s*['\"]?(0x[a-fA-F0-9]{40})", output)
-            tx_match = re.search(r"(?:Transaction Hash|tx_hash):\s*['\"]?(0x[a-fA-F0-9]+)", output, re.IGNORECASE)
 
             if addr_match:
                 return {
                     "success": True,
                     "address": addr_match.group(1),
                     "tx_hash": tx_match.group(1) if tx_match else "",
-                    "output": output[-500:],
+                    "output": combined[-500:],
                 }
 
-            # Fallback: any 0x40 hex in output
-            any_addr = re.search(r"(0x[a-fA-F0-9]{40})", output)
-            if any_addr and "deployed" in output.lower():
+            # Fallback: any 0x40 hex in output when the output clearly indicates success
+            any_addr = re.search(r"(0x[a-fA-F0-9]{40})", combined)
+            if any_addr and ("deployed" in combined.lower() or "success" in combined.lower()):
                 return {
                     "success": True,
                     "address": any_addr.group(1),
                     "tx_hash": tx_match.group(1) if tx_match else "",
-                    "output": output[-500:],
+                    "output": combined[-500:],
                 }
 
-            return {
-                "success": False,
-                "error": (stderr or output or "No contract address in CLI output")[-1000:],
-            }
+            # Non-zero exit code or no address = failure
+            err_body = stderr or output or "No contract address in CLI output"
+            return {"success": False, "error": err_body[-1500:]}
 
         except subprocess.TimeoutExpired:
             return {"success": False, "error": "Deploy timed out after 180s"}
@@ -156,7 +206,7 @@ class GenLayerClient:
             except OSError:
                 pass
 
-    # ---------------- Call / Write ----------------
+    # ---------------- Call / Write (per-user signing) ----------------
 
     async def call_contract(
         self,
@@ -165,7 +215,7 @@ class GenLayerClient:
         args: list | None = None,
         network: str = "studionet",
     ) -> dict[str, Any]:
-        """Read from a contract via `genlayer call`."""
+        """Read from a contract via `genlayer call` (no signing needed)."""
         await self.set_network(network)
 
         cmd = ["genlayer", "call", contract_address, method]
@@ -173,72 +223,58 @@ class GenLayerClient:
             cmd.append("--args")
             cmd.extend(json.dumps(a) if not isinstance(a, str) else a for a in args)
 
-        proc = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, timeout=60
-        )
-
+        proc = await _run(cmd, timeout=60)
         if proc.returncode != 0:
             return {"error": (proc.stderr or proc.stdout)[-800:]}
 
-        # Try to parse a JSON result from output
-        output = proc.stdout
-        json_match = re.search(r"Result:\s*(\{.*\}|\[.*\]|\".*\"|\d+|true|false|null)", output, re.DOTALL)
-        if json_match:
+        output = proc.stdout or ""
+        m = re.search(r"Result:\s*(\{.*\}|\[.*\]|\".*\"|\d+|true|false|null)", output, re.DOTALL)
+        if m:
             try:
-                return {"result": json.loads(json_match.group(1))}
+                return {"result": json.loads(m.group(1))}
             except json.JSONDecodeError:
-                return {"result": json_match.group(1).strip()}
+                return {"result": m.group(1).strip()}
         return {"result": output.strip()}
 
     async def write_contract(
         self,
-        from_address: str,
+        user_id: int,
+        private_key: str,
         contract_address: str,
         method: str,
         args: list | None = None,
         network: str = "studionet",
     ) -> dict[str, Any]:
-        """Write transaction via `genlayer write`."""
+        """Write tx via `genlayer write`. Requires per-user account setup."""
         await self.set_network(network)
+        try:
+            await self.ensure_account(user_id, private_key)
+        except Exception as e:
+            return {"error": f"Account setup failed: {e}"}
 
         cmd = ["genlayer", "write", contract_address, method]
         if args:
             cmd.append("--args")
             cmd.extend(json.dumps(a) if not isinstance(a, str) else a for a in args)
 
-        proc = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, timeout=120
-        )
-
+        proc = await _run(cmd, timeout=120)
         if proc.returncode != 0:
             return {"error": (proc.stderr or proc.stdout)[-800:]}
 
-        tx_match = re.search(r"(?:Transaction Hash|tx_hash):\s*['\"]?(0x[a-fA-F0-9]+)", proc.stdout, re.IGNORECASE)
+        tx_match = re.search(r"(?:Transaction Hash|tx_hash)['\":]*\s*['\"]?(0x[a-fA-F0-9]+)", proc.stdout or "", re.IGNORECASE)
         return {
-            "result": proc.stdout.strip()[-500:],
+            "result": (proc.stdout or "")[-500:],
             "tx_hash": tx_match.group(1) if tx_match else "",
         }
 
-    # ---------------- Code / schema ----------------
-
     async def get_code(self, contract_address: str, network: str = "studionet") -> str:
-        """Fetch deployed contract source via `genlayer code`."""
         await self.set_network(network)
-        proc = await asyncio.to_thread(
-            subprocess.run,
-            ["genlayer", "code", contract_address],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode != 0:
-            return ""
-        return proc.stdout
+        proc = await _run(["genlayer", "code", contract_address], timeout=30)
+        return proc.stdout if proc.returncode == 0 else ""
 
     # ---------------- RPC fallback ----------------
 
     async def _rpc(self, method: str, params: list | None = None) -> dict:
-        """Raw JSON-RPC call."""
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []}
         try:
             async with httpx.AsyncClient(timeout=30.0) as c:
@@ -261,6 +297,6 @@ class GenLayerClient:
         return await self._rpc("eth_getBalance", [address, "latest"])
 
 
-# Singletons expected by existing imports
+# Singletons
 genlayer_rpc = GenLayerClient()
 genlayer_client = genlayer_rpc
