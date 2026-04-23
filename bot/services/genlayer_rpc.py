@@ -35,7 +35,9 @@ NETWORK_ALIASES = {
 # Shared password for keystore entries the bot creates. These accounts
 # are ephemeral (removed after each deploy) and the private key material
 # is separately encrypted in SQLite, so the password is a formality.
-_KEYSTORE_PASSWORD = "genbot-ephemeral-password-1234!"
+# IMPORTANT: Keep this plain alphanumeric — special chars can misbehave
+# when piped through stdin on minimal containers (no OS keychain).
+_KEYSTORE_PASSWORD = "genbotephemeralpassword1234"
 
 
 def _account_name_for_user(user_id: int) -> str:
@@ -76,12 +78,21 @@ class GenLayerClient:
     async def ensure_account(self, user_id: int, private_key: str) -> str:
         """Import + unlock the user's private key as a genlayer account.
 
-        Returns the account name. Idempotent: if the account already exists
-        we overwrite it (safe because keystore password is bot-owned).
+        Idempotent: remove any prior keystore with the same name first,
+        then freshly import with our known password.
+        Returns the account name.
         """
         name = _account_name_for_user(user_id)
 
-        # Import (with --overwrite to keep re-imports safe)
+        # 1. Nuke any prior keystore for this name so the password can't drift.
+        #    `account remove` prompts for confirmation, pipe 'y\n'.
+        await _run(
+            ["genlayer", "account", "remove", name],
+            timeout=15,
+            stdin_input="y\n",
+        )
+
+        # 2. Fresh import with --overwrite defensively
         proc = await _run(
             [
                 "genlayer", "account", "import",
@@ -92,13 +103,19 @@ class GenLayerClient:
             ],
             timeout=30,
         )
+        logger.info(
+            "account import rc=%s stdout=%s stderr=%s",
+            proc.returncode,
+            (proc.stdout or "")[-200:],
+            (proc.stderr or "")[-200:],
+        )
         if proc.returncode != 0:
             raise RuntimeError(f"account import failed: {proc.stderr or proc.stdout}")
 
-        # Use this account as active
+        # 3. Use this account as active
         await _run(["genlayer", "account", "use", name], timeout=15)
 
-        # Unlock so deploy can sign
+        # 4. Unlock (no-op on Render because no OS keychain, but harmless)
         unlock_proc = await _run(
             [
                 "genlayer", "account", "unlock",
@@ -108,7 +125,7 @@ class GenLayerClient:
             timeout=30,
         )
         if unlock_proc.returncode != 0:
-            logger.warning("unlock returned non-zero: %s", unlock_proc.stderr[:300])
+            logger.warning("unlock rc=%s stderr=%s", unlock_proc.returncode, (unlock_proc.stderr or "")[:300])
 
         return name
 
