@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genbot"
+version = "0.1.0"
+description = "Telegram bot for deploying and interacting with GenLayer intelligent contracts."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "python-telegram-bot[all]==21.6",
+  "httpx==0.28.1",
+  "aiosqlite==0.22.1",
+  "pydantic==2.11.10",
+  "pydantic-settings==2.14.0",
+  "cryptography==45.0.7",
+  "anthropic==0.96.0",
+  "eth-account==0.13.7",
+  "web3==7.6.0",
+  "apscheduler==3.10.4",
+  "python-dotenv==1.1.1",
+]
+
+[project.scripts]
+genbot = "bot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["bot*"]

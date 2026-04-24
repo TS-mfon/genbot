@@ -9,10 +9,15 @@ NETWORKS = {
         "name": "StudioNet",
         "description": "GenLayer development network",
     },
-    "net_testnet": {
-        "key": "testnet",
+    "net_bradbury": {
+        "key": "testnet-bradbury",
         "name": "Bradbury Testnet",
         "description": "GenLayer public testnet",
+    },
+    "net_asimov": {
+        "key": "testnet-asimov",
+        "name": "Asimov Testnet",
+        "description": "Alternative GenLayer public testnet",
     },
 }
 
@@ -20,11 +25,15 @@ NETWORKS = {
 async def network_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /network command - show network selection buttons."""
     current = context.user_data.get("network", "studionet")
-    current_name = "StudioNet" if current == "studionet" else "Bradbury Testnet"
+    current_name = next(
+        (net["name"] for net in NETWORKS.values() if net["key"] == current),
+        "StudioNet",
+    )
 
     keyboard = [
         [InlineKeyboardButton("StudioNet", callback_data="net_studionet")],
-        [InlineKeyboardButton("Bradbury Testnet", callback_data="net_testnet")],
+        [InlineKeyboardButton("Bradbury Testnet", callback_data="net_bradbury")],
+        [InlineKeyboardButton("Asimov Testnet", callback_data="net_asimov")],
     ]
     await update.message.reply_text(
         f"Current network: <b>{current_name}</b>\n\n"
@@ -50,6 +59,6 @@ async def network_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.edit_message_text(
         f"Network set to: <b>{net['name']}</b>\n"
         f"{net['description']}\n\n"
-        f"All future deployments will use this network.",
+        f"All future deploy, call, write, schema, and tx commands will use this network.",
         parse_mode="HTML",
     )

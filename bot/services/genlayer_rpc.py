@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from typing import Any
@@ -25,9 +26,10 @@ logger = logging.getLogger(__name__)
 
 NETWORK_ALIASES = {
     "studionet": "studionet",
-    "testnet": "testnet-asimov",
-    "bradbury": "testnet-asimov",
-    "testnet-bradbury": "testnet-asimov",
+    "testnet": "testnet-bradbury",
+    "bradbury": "testnet-bradbury",
+    "testnet-bradbury": "testnet-bradbury",
+    "asimov": "testnet-asimov",
     "testnet-asimov": "testnet-asimov",
     "localnet": "localnet",
 }
@@ -68,6 +70,16 @@ class GenLayerClient:
     def resolve_network(self, name: str) -> str:
         return NETWORK_ALIASES.get(name, "studionet")
 
+    async def get_cli_version(self) -> str:
+        """Return the installed genlayer CLI version."""
+        if shutil.which("genlayer") is None:
+            raise FileNotFoundError("genlayer CLI not found in PATH")
+
+        proc = await _run(["genlayer", "--version"], timeout=15)
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "genlayer --version failed").strip())
+        return (proc.stdout or proc.stderr).strip()
+
     async def set_network(self, name: str) -> bool:
         alias = self.resolve_network(name)
         proc = await _run(["genlayer", "network", "set", alias], timeout=30)
@@ -85,11 +97,9 @@ class GenLayerClient:
         name = _account_name_for_user(user_id)
 
         # 1. Nuke any prior keystore for this name so the password can't drift.
-        #    `account remove` prompts for confirmation, pipe 'y\n'.
         await _run(
-            ["genlayer", "account", "remove", name],
+            ["genlayer", "account", "remove", "--force", name],
             timeout=15,
-            stdin_input="y\n",
         )
 
         # 2. Fresh import with --overwrite defensively
@@ -242,7 +252,7 @@ class GenLayerClient:
         cmd = ["genlayer", "call", contract_address, method]
         if args:
             cmd.append("--args")
-            cmd.extend(json.dumps(a) if not isinstance(a, str) else a for a in args)
+            cmd.extend(self._format_cli_arg(a) for a in args)
 
         proc = await _run(cmd, timeout=60)
         if proc.returncode != 0:
@@ -276,7 +286,7 @@ class GenLayerClient:
         cmd = ["genlayer", "write", contract_address, method]
         if args:
             cmd.append("--args")
-            cmd.extend(json.dumps(a) if not isinstance(a, str) else a for a in args)
+            cmd.extend(self._format_cli_arg(a) for a in args)
 
         # Pipe password on stdin in case CLI prompts (Render has no OS keychain)
         pw_stdin = (_KEYSTORE_PASSWORD + "\n") * 3
@@ -295,7 +305,34 @@ class GenLayerClient:
         proc = await _run(["genlayer", "code", contract_address], timeout=30)
         return proc.stdout if proc.returncode == 0 else ""
 
+    async def get_schema(self, contract_address: str, network: str = "studionet") -> dict[str, Any]:
+        """Read deployed contract schema via the CLI."""
+        await self.set_network(network)
+        proc = await _run(["genlayer", "schema", contract_address], timeout=30)
+        if proc.returncode != 0:
+            return {"error": (proc.stderr or proc.stdout or "schema failed")[-1000:]}
+        return {"result": (proc.stdout or "").strip()}
+
+    async def get_transaction(self, tx_hash: str, network: str = "studionet") -> dict[str, Any]:
+        """Inspect a transaction via `genlayer receipt`."""
+        await self.set_network(network)
+        proc = await _run(["genlayer", "receipt", tx_hash], timeout=90)
+        if proc.returncode != 0:
+            return {"error": (proc.stderr or proc.stdout or "receipt failed")[-1500:]}
+        return {"result": (proc.stdout or "").strip()}
+
     # ---------------- RPC fallback ----------------
+
+    @staticmethod
+    def _format_cli_arg(value: Any) -> str:
+        """Format Python values for `genlayer --args`."""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if value is None:
+            return "null"
+        if isinstance(value, (dict, list)):
+            return json.dumps(value)
+        return str(value)
 
     async def _rpc(self, method: str, params: list | None = None) -> dict:
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []}
@@ -306,9 +343,6 @@ class GenLayerClient:
                 return r.json()
         except Exception as e:
             return {"error": str(e)}
-
-    async def get_transaction(self, tx_hash: str) -> dict:
-        return await self._rpc("eth_getTransactionByHash", [tx_hash])
 
     async def get_validators(self) -> dict:
         return await self._rpc("gen_getValidators", [])

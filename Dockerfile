@@ -9,8 +9,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --user --no-cache-dir --no-warn-script-location -r requirements.txt
+COPY requirements.txt pyproject.toml README.md ./
+COPY bot ./bot
+RUN pip install --user --no-cache-dir --no-warn-script-location -r requirements.txt \
+    && pip install --user --no-cache-dir --no-warn-script-location .
 
 FROM python:3.11-slim
 
@@ -42,4 +44,4 @@ EXPOSE 10000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:10000/').read()" || exit 1
 
-CMD ["python", "-m", "bot.main"]
+CMD ["genbot"]

@@ -18,6 +18,7 @@ from telegram.ext import (
 from bot.config import settings
 from bot.db.database import init_db
 from bot.handlers.start import start_handler, help_handler
+from bot.handlers.guide import guide_handler
 from bot.handlers.deploy import (
     deploy_handler,
     deploy_code_handler,
@@ -34,6 +35,7 @@ from bot.handlers.call import (
 from bot.handlers.ask import ask_handler, ask_address_handler, ask_query_handler, ASK_STATE
 from bot.handlers.contracts import contracts_handler
 from bot.handlers.tx import tx_handler
+from bot.handlers.schema import schema_handler
 from bot.handlers.template import (
     template_handler,
     template_callback,
@@ -162,8 +164,10 @@ def main():
     # Simple command handlers
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
+    app.add_handler(CommandHandler("guide", guide_handler))
     app.add_handler(CommandHandler("contracts", contracts_handler))
     app.add_handler(CommandHandler("tx", tx_handler))
+    app.add_handler(CommandHandler("schema", schema_handler))
     app.add_handler(CommandHandler("faucet", faucet_handler))
     app.add_handler(CommandHandler("validators", validators_handler))
     app.add_handler(CommandHandler("network", network_command))
@@ -208,6 +212,10 @@ def start_health_server():
     server.serve_forever()
 
 
-if __name__ == "__main__":
+def main_cli():
     threading.Thread(target=start_health_server, daemon=True).start()
     main()
+
+
+if __name__ == "__main__":
+    main_cli()

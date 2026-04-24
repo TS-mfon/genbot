@@ -14,6 +14,7 @@ Commands:
   /deploy     - Deploy a new Intelligent Contract
   /call       - Read from a deployed contract
   /write      - Write a transaction to a contract
+  /schema     - Inspect contract methods before interacting
   /ask        - Natural language query to a contract
   /contracts  - List your deployed contracts
   /tx         - Look up a transaction by hash
@@ -21,10 +22,15 @@ Commands:
   /audit      - AI-powered contract security audit
   /faucet     - Request testnet tokens
   /validators - View validator status
-  /network    - Switch between StudioNet / Bradbury Testnet
+  /network    - Switch between StudioNet / Bradbury / Asimov
+  /guide      - See exact input formats and examples
   /help       - Show this help message
 
-Get started by deploying a contract with /deploy or grab a template with /template!
+Best flow:
+  1. /network
+  2. /deploy
+  3. /schema <address>
+  4. /call or /write
 """.strip()
 
 
@@ -48,7 +54,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             f"<tg-spoiler>{wallet['private_key']}</tg-spoiler>\n\n"
             f"Tap the hidden text above to reveal your private key.\n"
             f"Store it safely - you will need it to manage your account.\n\n"
-            f"Set a password with /password before deploying.",
+            f"Use /guide for exact deploy, call, and write input examples.",
             parse_mode="HTML",
         )
     else:
