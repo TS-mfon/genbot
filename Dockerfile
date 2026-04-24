@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt pyproject.toml README.md ./
 COPY bot ./bot
 RUN pip install --user --no-cache-dir --no-warn-script-location -r requirements.txt \
-    && pip install --user --no-cache-dir --no-warn-script-location .
+    && pip install --user --no-cache-dir --no-warn-script-location setuptools wheel \
+    && pip install --user --no-cache-dir --no-warn-script-location --no-build-isolation .
 
 FROM python:3.11-slim
 
