@@ -5,6 +5,24 @@ from telegram.ext import ContextTypes
 
 from bot.services.wallet_service import wallet_service
 
+BOT_COMMANDS = [
+    ("start", "Create your wallet and show the overview"),
+    ("commands", "List available bot commands"),
+    ("help", "Show the main overview"),
+    ("guide", "Show exact input formats and examples"),
+    ("network", "Switch GenLayer network"),
+    ("deploy", "Deploy a GenLayer contract"),
+    ("schema", "Inspect a deployed contract schema"),
+    ("call", "Read from a deployed contract"),
+    ("write", "Write to a deployed contract"),
+    ("contracts", "List your deployed contracts"),
+    ("tx", "Inspect a transaction receipt"),
+    ("template", "Get starter contract templates"),
+    ("audit", "Audit contract code"),
+    ("validators", "View validator status"),
+    ("faucet", "Request testnet funds"),
+]
+
 WELCOME_TEXT = """
 Welcome to GenBot - Your GenLayer Intelligent Contract Assistant!
 
@@ -68,4 +86,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help command."""
+    await update.message.reply_text(WELCOME_TEXT)
+
+
+async def commands_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /commands command."""
     await update.message.reply_text(WELCOME_TEXT)

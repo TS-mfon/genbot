@@ -6,6 +6,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import logging
 
+from telegram import BotCommand
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -17,7 +18,7 @@ from telegram.ext import (
 
 from bot.config import settings
 from bot.db.database import init_db
-from bot.handlers.start import start_handler, help_handler
+from bot.handlers.start import start_handler, help_handler, commands_handler, BOT_COMMANDS
 from bot.handlers.guide import guide_handler
 from bot.handlers.deploy import (
     deploy_handler,
@@ -146,6 +147,9 @@ def build_conversation_handlers():
 async def post_init(application):
     """Initialize database after application starts."""
     await init_db()
+    await application.bot.set_my_commands(
+        [BotCommand(command, description) for command, description in BOT_COMMANDS]
+    )
     logger.info("Database initialized.")
 
 
@@ -163,6 +167,7 @@ def main():
 
     # Simple command handlers
     app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(CommandHandler("commands", commands_handler))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("guide", guide_handler))
     app.add_handler(CommandHandler("contracts", contracts_handler))
