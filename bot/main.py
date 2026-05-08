@@ -229,7 +229,9 @@ def start_health_server():
 
 
 def main_cli():
-    threading.Thread(target=start_health_server, daemon=True).start()
+    webhook_base = settings.webhook_base_url.strip() or os.environ.get("RENDER_EXTERNAL_URL", "").strip()
+    if not webhook_base:
+        threading.Thread(target=start_health_server, daemon=True).start()
     main()
 
 
