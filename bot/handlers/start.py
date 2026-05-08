@@ -20,7 +20,6 @@ BOT_COMMANDS = [
     ("template", "Get starter contract templates"),
     ("audit", "Audit contract code"),
     ("validators", "View validator status"),
-    ("faucet", "Request testnet funds"),
 ]
 
 WELCOME_TEXT = """
@@ -38,7 +37,6 @@ Commands:
   /tx         - Look up a transaction by hash
   /template   - Get starter contract templates
   /audit      - AI-powered contract security audit
-  /faucet     - Request testnet tokens
   /validators - View validator status
   /network    - Switch between StudioNet / Bradbury / Asimov
   /guide      - See exact input formats and examples

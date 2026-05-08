@@ -44,7 +44,6 @@ from bot.handlers.template import (
     TEMPLATE_STATE,
 )
 from bot.handlers.audit import audit_handler, audit_code_handler, AUDIT_STATE
-from bot.handlers.faucet import faucet_handler
 from bot.handlers.validators import validators_handler
 from bot.handlers.network import network_command, network_callback
 from bot.handlers.password import password_handler, password_receive_handler, PASSWORD_STATE
@@ -173,7 +172,6 @@ def main():
     app.add_handler(CommandHandler("contracts", contracts_handler))
     app.add_handler(CommandHandler("tx", tx_handler))
     app.add_handler(CommandHandler("schema", schema_handler))
-    app.add_handler(CommandHandler("faucet", faucet_handler))
     app.add_handler(CommandHandler("validators", validators_handler))
     app.add_handler(CommandHandler("network", network_command))
 
@@ -185,6 +183,19 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, _standalone_file_upload))
 
     logger.info("GenBot starting...")
+    webhook_base = settings.webhook_base_url.strip() or os.environ.get("RENDER_EXTERNAL_URL", "").strip()
+    if webhook_base:
+        token = settings.telegram_bot_token
+        url_path = f"/telegram/{token}"
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.environ.get("PORT", "10000")),
+            url_path=url_path,
+            webhook_url=f"{webhook_base}{url_path}",
+            drop_pending_updates=True,
+        )
+        return
+
     app.run_polling(drop_pending_updates=True)
 
 

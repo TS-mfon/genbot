@@ -11,8 +11,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="", description="Anthropic API key for audits")
     wallet_encryption_key: str = Field(..., description="Fernet key for wallet encryption")
     database_path: str = Field(default="genbot.db", description="SQLite database path")
+    webhook_base_url: str = Field(
+        default="",
+        description="Public HTTPS base URL used for Telegram webhooks on Render",
+    )
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()
