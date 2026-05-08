@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt pyproject.toml README.md ./
+COPY requirements.txt pyproject.toml ./
 COPY bot ./bot
 RUN pip install --user --no-cache-dir --no-warn-script-location -r requirements.txt \
     && pip install --user --no-cache-dir --no-warn-script-location setuptools wheel \
