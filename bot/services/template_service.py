@@ -4,9 +4,15 @@ from bot.templates.prediction_market import PREDICTION_MARKET_CODE
 from bot.templates.voting_dao import VOTING_DAO_CODE
 from bot.templates.escrow import ESCROW_CODE
 from bot.templates.token_manager import TOKEN_MANAGER_CODE
+from bot.templates.storage_counter import STORAGE_COUNTER_CODE
 
 
 TEMPLATES = [
+    {
+        "key": "storage_counter",
+        "name": "Storage Counter",
+        "description": "Minimal correct gl.Contract skeleton with typed storage and view/write methods",
+    },
     {
         "key": "prediction_market",
         "name": "Prediction Market",
@@ -30,6 +36,7 @@ TEMPLATES = [
 ]
 
 TEMPLATE_CODE = {
+    "storage_counter": STORAGE_COUNTER_CODE,
     "prediction_market": PREDICTION_MARKET_CODE,
     "voting_dao": VOTING_DAO_CODE,
     "escrow": ESCROW_CODE,

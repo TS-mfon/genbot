@@ -22,23 +22,28 @@ A production-grade Telegram bot for deploying and interacting with GenLayer Inte
 
 ### Wallet
 - `/start` — Create wallet (shows private key once)
-- `/faucet` — Request testnet tokens
 
 ## Contract Headers
 
 GenLayer contracts must start with a header:
 
 ```python
-# { "Depends": "py-genlayer:test" }
-```
-
-For Bradbury testnet, use the pinned hash:
-
-```python
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 ```
 
-GenBot **auto-prepends** the default header if your code doesn't start with one.
+GenBot **normalizes** the file before deployment so this exact magic comment is the first line. If a user sends a bare JSON dependency line or an older dependency line, the bot replaces it with the supported pinned dependency header.
+
+## Contract Structure Guide
+
+GenBot validates contract shape using the same rules as the internal `write-contract` guidance:
+
+- Contract class must extend `gl.Contract`; do not use the old `@gl.contract` decorator.
+- Storage fields should be class-level type annotations.
+- Persisted collections should use GenLayer types such as `DynArray[T]` and `TreeMap[K, V]`, not Python `list` or `dict`.
+- Public methods must use `@gl.public.view` or `@gl.public.write`.
+- Expected contract failures should use `gl.vm.UserError`.
+- LLM calls should request JSON with `response_format="json"` and validate returned fields.
+- `strict_eq` should be reserved for deterministic or canonicalized outputs; LLM and variable web workflows need explicit validator logic.
 
 ## Deployment Flow
 
@@ -78,7 +83,7 @@ Use `/guide` inside Telegram to see the supported argument formats and copyable 
 ```bash
 cp .env.example .env
 # Fill in TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY, WALLET_ENCRYPTION_KEY
-npm install -g genlayer@0.37.1
+npm install -g genlayer@0.39.0
 pip install -e .
 genbot --check
 genbot

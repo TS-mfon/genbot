@@ -153,10 +153,10 @@ class GenLayerClient:
             {"success": True, "address": "0x...", "tx_hash": "0x...", "output": "..."}
             {"success": False, "error": "..."}
         """
-        # Auto-prepend valid header if missing
-        code_stripped = code.strip()
-        if not code_stripped.startswith("#"):
-            code = '# { "Depends": "py-genlayer:test" }\n' + code
+        # Deployment handler normalizes this, but keep a safety net for direct calls.
+        code_stripped = code.lstrip()
+        if not code_stripped.startswith('# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }'):
+            code = '# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }\n' + code_stripped
 
         # 1. Select network
         await self.set_network(network)

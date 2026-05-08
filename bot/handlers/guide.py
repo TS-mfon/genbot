@@ -17,8 +17,35 @@ Use <code>/deploy</code>, then send either:
 - a <code>.py</code> contract file
 - the full Python source code as a message
 
-If your contract has no GenLayer header, GenBot adds:
-<code># { "Depends": "py-genlayer:test" }</code>
+Your contract must start with the GenLayer dependency magic comment. GenBot normalizes this before deploy:
+<code># { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }</code>
+
+Correct contract skeleton:
+<code>from genlayer import *
+
+class MyContract(gl.Contract):
+    owner: Address
+    count: u256
+
+    def __init__(self):
+        self.owner = gl.message.sender_account
+        self.count = u256(0)
+
+    @gl.public.view
+    def get_count(self) -> u256:
+        return self.count
+
+    @gl.public.write
+    def increment(self) -> None:
+        self.count += u256(1)</code>
+
+Contract rules:
+- Extend <code>gl.Contract</code>; do not use old <code>@gl.contract</code>
+- Declare storage as class-level type annotations
+- Use <code>DynArray</code> / <code>TreeMap</code> for persisted collections
+- Decorate public methods with <code>@gl.public.view</code> or <code>@gl.public.write</code>
+- Use <code>gl.vm.UserError</code> for expected contract errors
+- Use <code>response_format="json"</code> and explicit validators for LLM workflows
 
 <b>3. Inspect methods before calling</b>
 Use <code>/schema &lt;contract_address&gt;</code> to see available methods and argument shapes.

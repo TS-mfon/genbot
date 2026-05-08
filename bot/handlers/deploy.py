@@ -2,6 +2,7 @@
 
 import ast
 import logging
+import re
 
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
@@ -15,6 +16,40 @@ logger = logging.getLogger(__name__)
 
 DEPLOY_STATE = 10
 MAX_CONTRACT_SIZE = 200_000  # 200KB
+GENLAYER_DEPENDS_HEADER = '# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }'
+_DEPENDS_RE = re.compile(r'^\s*#?\s*\{\s*"Depends"\s*:\s*"py-genlayer:[^"]+"\s*\}\s*\n?', re.I)
+_CONTRACT_CLASS_RE = re.compile(r"class\s+\w+\s*\([^)]*\bgl\.Contract\b[^)]*\)\s*:")
+
+
+def normalize_contract_code(code: str) -> str:
+    """Ensure the official GenLayer dependency magic comment is the first line."""
+    code = code.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff").lstrip()
+    code = _DEPENDS_RE.sub("", code, count=1).lstrip()
+    return f"{GENLAYER_DEPENDS_HEADER}\n{code}"
+
+
+def contract_guidance_warnings(code: str) -> list[str]:
+    """Return high-signal guidance from the GenLayer write-contract skill."""
+    warnings: list[str] = []
+
+    if "@gl.contract" in code:
+        warnings.append("Use <code>class MyContract(gl.Contract)</code>; do not use the old <code>@gl.contract</code> decorator.")
+    if not _CONTRACT_CLASS_RE.search(code):
+        warnings.append("Define exactly one contract class that extends <code>gl.Contract</code>.")
+    if "@gl.public.view" not in code and "@gl.public.write" not in code:
+        warnings.append("Add at least one public method decorated with <code>@gl.public.view</code> or <code>@gl.public.write</code>.")
+    if re.search(r"self\.\w+\s*:\s*\w+\s*=", code):
+        warnings.append("Declare storage fields as class-level type annotations, not typed assignments inside <code>__init__</code>.")
+    if re.search(r"self\.\w+\s*=\s*(\[\]|\{\}|list\(|dict\()", code):
+        warnings.append("Use GenLayer storage types like <code>DynArray[T]</code> or <code>TreeMap[K, V]</code>, not Python list/dict for persisted state.")
+    if "gl.nondet.exec_prompt" in code and 'response_format="json"' not in code and "response_format='json'" not in code:
+        warnings.append("For LLM calls, use <code>gl.nondet.exec_prompt(..., response_format=\"json\")</code> and validate the returned shape.")
+    if "strict_eq" in code and ("exec_prompt" in code or "nondet.web" in code or "get_webpage" in code):
+        warnings.append("Use <code>strict_eq</code> only for deterministic/canonicalized outputs; LLM and variable web data need a custom validator.")
+    if "raise Exception" in code:
+        warnings.append("Use <code>gl.vm.UserError</code> with expected/transient error prefixes instead of bare exceptions.")
+
+    return warnings
 
 
 @rate_limited
@@ -24,8 +59,8 @@ async def deploy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"🚀 <b>Deploy to GenLayer ({network})</b>\n\n"
         f"Upload a <b>.py</b> file or paste the full Python source code.\n\n"
         f"Your contract should start with:\n"
-        f"<code># {{\"Depends\": \"py-genlayer:test\"}}</code>\n\n"
-        f"If missing, it will be auto-prepended.\n\n"
+        f"<code>{GENLAYER_DEPENDS_HEADER}</code>\n\n"
+        f"If missing or malformed, GenBot will normalize it before deployment.\n\n"
         f"Use /network to change network. Send /cancel to abort.",
         parse_mode="HTML",
     )
@@ -84,7 +119,9 @@ async def _validate_and_deploy(
 ) -> int:
     user_id = update.effective_user.id
 
-    # Syntax check
+    code = normalize_contract_code(code)
+
+    # Syntax check after header normalization.
     try:
         ast.parse(code)
     except SyntaxError as e:
@@ -103,6 +140,22 @@ async def _validate_and_deploy(
         )
         return DEPLOY_STATE
 
+    warnings = contract_guidance_warnings(code)
+    blocking = [
+        warning for warning in warnings
+        if "extends <code>gl.Contract</code>" in warning
+        or "public method decorated" in warning
+        or "old <code>@gl.contract</code>" in warning
+    ]
+    if blocking:
+        await update.message.reply_text(
+            "❌ <b>Contract structure needs fixing:</b>\n\n"
+            + "\n".join(f"• {warning}" for warning in blocking)
+            + "\n\nUse /template for a correct starter contract.",
+            parse_mode="HTML",
+        )
+        return DEPLOY_STATE
+
     network = context.user_data.get("network", "studionet")
 
     await update.message.reply_text(
@@ -111,6 +164,13 @@ async def _validate_and_deploy(
         f"This takes 30-90 seconds.",
         parse_mode="HTML",
     )
+
+    if warnings:
+        await update.message.reply_text(
+            "GenLayer contract quality notes:\n\n"
+            + "\n".join(f"• {warning}" for warning in warnings[:5]),
+            parse_mode="HTML",
+        )
 
     try:
         wallet = await wallet_service.get_or_create_wallet(user_id)
