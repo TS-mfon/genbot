@@ -1,110 +1,108 @@
 """Escrow template contract for GenLayer."""
 
-ESCROW_CODE = '''from genlayer import *
+ESCROW_CODE = '''# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+from genlayer import *
 
 
-@gl.contract
-class Escrow:
-    """Trustless escrow with AI-verified delivery confirmation.
-    Funds are held until validators confirm delivery via web evidence."""
+class Escrow(gl.Contract):
+    """Escrow state machine with optional validator-checked delivery evidence."""
 
-    escrows: TreeMap[str, dict]
     escrow_count: u256
+    buyers: TreeMap[str, str]
+    sellers: TreeMap[str, str]
+    amounts: TreeMap[str, u256]
+    descriptions: TreeMap[str, str]
+    verification_urls: TreeMap[str, str]
+    statuses: TreeMap[str, str]
 
     def __init__(self):
         self.escrow_count = u256(0)
-        self.escrows = TreeMap[str, dict]()
 
     @gl.public.write
     def create_escrow(
         self, seller: str, amount: int, description: str, verification_url: str
     ) -> str:
-        """Create a new escrow agreement."""
-        escrow_id = str(self.escrow_count)
+        if amount <= 0:
+            raise gl.vm.UserError("[EXPECTED] Amount must be positive")
+
+        escrow_id = str(int(self.escrow_count))
         self.escrow_count += u256(1)
-
-        self.escrows[escrow_id] = {
-            "buyer": str(gl.message.sender),
-            "seller": seller,
-            "amount": amount,
-            "description": description,
-            "verification_url": verification_url,
-            "status": "active",
-            "created_at": str(gl.message.sender),
-        }
-        return f"Escrow {escrow_id} created for {amount} tokens"
+        self.buyers[escrow_id] = str(gl.message.sender_account)
+        self.sellers[escrow_id] = seller
+        self.amounts[escrow_id] = u256(amount)
+        self.descriptions[escrow_id] = description
+        self.verification_urls[escrow_id] = verification_url
+        self.statuses[escrow_id] = "active"
+        return escrow_id
 
     @gl.public.write
-    def confirm_delivery(self, escrow_id: str) -> str:
-        """Buyer manually confirms delivery, releasing funds."""
-        escrow = self.escrows[escrow_id]
-        if str(gl.message.sender) != escrow["buyer"]:
-            return "Only buyer can confirm delivery"
-        if escrow["status"] != "active":
-            return f"Escrow is {escrow['status']}"
-
-        escrow["status"] = "completed"
-        self.escrows[escrow_id] = escrow
-        return f"Delivery confirmed. {escrow['amount']} released to seller."
+    def confirm_delivery(self, escrow_id: str) -> None:
+        if str(gl.message.sender_account) != self.buyers.get(escrow_id, ""):
+            raise gl.vm.UserError("[EXPECTED] Only buyer can confirm delivery")
+        if self.statuses.get(escrow_id, "") != "active":
+            raise gl.vm.UserError("[EXPECTED] Escrow is not active")
+        self.statuses[escrow_id] = "completed"
 
     @gl.public.write
-    def verify_and_release(self, escrow_id: str) -> str:
-        """AI-verified delivery confirmation using web evidence."""
-        escrow = self.escrows[escrow_id]
-        if escrow["status"] != "active":
-            return f"Escrow is {escrow['status']}"
-
-        with EquivalencePrinciple(
-            result=check_delivery(
-                escrow["description"],
-                escrow["verification_url"],
-            ),
-            principle="Delivery must be verifiably confirmed based on the "
-                      "tracking or proof URL provided. Return 'delivered' only "
-                      "if clear evidence of delivery exists.",
-            comparative=True,
-        ) as verification:
-            if verification.result == "delivered":
-                escrow["status"] = "completed"
-                self.escrows[escrow_id] = escrow
-                return f"Delivery verified! {escrow['amount']} released to seller."
-            else:
-                return "Delivery could not be verified yet."
+    def dispute(self, escrow_id: str) -> None:
+        sender = str(gl.message.sender_account)
+        buyer = self.buyers.get(escrow_id, "")
+        seller = self.sellers.get(escrow_id, "")
+        if sender != buyer and sender != seller:
+            raise gl.vm.UserError("[EXPECTED] Only buyer or seller can dispute")
+        if self.statuses.get(escrow_id, "") != "active":
+            raise gl.vm.UserError("[EXPECTED] Escrow is not active")
+        self.statuses[escrow_id] = "disputed"
 
     @gl.public.write
-    def dispute(self, escrow_id: str) -> str:
-        """Open a dispute on an escrow."""
-        escrow = self.escrows[escrow_id]
-        sender = str(gl.message.sender)
-        if sender != escrow["buyer"] and sender != escrow["seller"]:
-            return "Only buyer or seller can dispute"
-        if escrow["status"] != "active":
-            return f"Escrow is {escrow['status']}"
+    def verify_and_release(self, escrow_id: str) -> bool:
+        if self.statuses.get(escrow_id, "") != "active":
+            raise gl.vm.UserError("[EXPECTED] Escrow is not active")
 
-        escrow["status"] = "disputed"
-        self.escrows[escrow_id] = escrow
-        return "Escrow disputed. Awaiting resolution."
+        delivered = self._check_delivery(
+            self.descriptions.get(escrow_id, ""),
+            self.verification_urls.get(escrow_id, ""),
+        )
+        if delivered:
+            self.statuses[escrow_id] = "completed"
+        return delivered
+
+    def _check_delivery(self, description: str, url: str) -> bool:
+        def leader_fn() -> bool:
+            page = gl.nondet.web.get(url).body.decode("utf-8")
+            prompt = (
+                "Check whether delivery is clearly confirmed by the source text. "
+                "Return exactly delivered or not_delivered.\\n"
+                + "Item: " + description + "\\n"
+                + "Source: " + page[:6000]
+            )
+            result = str(gl.nondet.exec_prompt(prompt)).strip().lower()
+            if result == "delivered":
+                return True
+            if result == "not_delivered":
+                return False
+            raise gl.vm.UserError("[LLM_ERROR] Resolver returned invalid status")
+
+        def validator_fn(leaders_res: gl.vm.Result) -> bool:
+            if not isinstance(leaders_res, gl.vm.Return):
+                return False
+            return bool(leaders_res.calldata) == leader_fn()
+
+        return gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
 
     @gl.public.view
     def get_escrow(self, escrow_id: str) -> dict:
-        """Get escrow details."""
-        return self.escrows[escrow_id]
+        return {
+            "id": escrow_id,
+            "buyer": self.buyers.get(escrow_id, ""),
+            "seller": self.sellers.get(escrow_id, ""),
+            "amount": int(self.amounts.get(escrow_id, u256(0))),
+            "description": self.descriptions.get(escrow_id, ""),
+            "verification_url": self.verification_urls.get(escrow_id, ""),
+            "status": self.statuses.get(escrow_id, ""),
+        }
 
     @gl.public.view
     def get_status(self, escrow_id: str) -> str:
-        """Get escrow status."""
-        return self.escrows[escrow_id]["status"]
-
-
-def check_delivery(description: str, url: str) -> str:
-    """Non-deterministic: check delivery status from a URL."""
-    web_data = gl.get_webpage(url, mode="text")
-    task = (
-        f"Check if the following item has been delivered:\\n"
-        f"Item: {description}\\n"
-        f"Tracking/proof page content: {web_data}\\n"
-        f"Respond with ONLY \\'delivered\\' or \\'not_delivered\\'."
-    )
-    result = gl.exec_prompt(task)
-    return result.strip().lower()
+        return self.statuses.get(escrow_id, "")
 '''

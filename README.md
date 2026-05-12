@@ -45,6 +45,28 @@ GenBot validates contract shape using the same rules as the internal `write-cont
 - LLM calls should request JSON with `response_format="json"` and validate returned fields.
 - `strict_eq` should be reserved for deterministic or canonicalized outputs; LLM and variable web workflows need explicit validator logic.
 
+## Starter Templates
+
+The `/template` command returns lint-clean GenLayer examples that use the current SDK shape:
+
+- `Storage Counter` — minimal `gl.Contract` with typed storage and owner-gated writes
+- `Token Manager` — fungible-token style balances and flat allowance indexes
+- `Voting DAO` — typed proposal, option, vote, and membership indexes
+- `Prediction Market` — typed market storage with `gl.vm.run_nondet_unsafe` outcome validation
+- `Escrow` — typed escrow state machine with validator-checked delivery evidence
+
+Template quality checks:
+
+```text
+genvm-lint check storage_counter.py     # Contract: StorageCounter, 3 methods
+genvm-lint check token_manager.py       # Contract: TokenManager, 7 methods
+genvm-lint check voting_dao.py          # Contract: VotingDAO, 7 methods
+genvm-lint check prediction_market.py   # Contract: PredictionMarket, 6 methods
+genvm-lint check escrow.py              # Contract: Escrow, 6 methods
+```
+
+All included templates pass GenVM lint and validation against the pinned dependency header.
+
 ## Deployment Flow
 
 `/deploy` uses the official `genlayer` CLI:
@@ -77,6 +99,15 @@ Use `/guide` inside Telegram to see the supported argument formats and copyable 
 - Multi-stage Docker build with Node.js + genlayer CLI pre-installed
 - Health endpoint on `/`
 - Fernet-encrypted private keys
+
+## Live Bot and Deployment Evidence
+
+- Telegram bot username: `@Genlayertgbot`
+- Telegram bot id: `8672625541`
+- Telegram delivery mode: long polling, webhook URL empty
+- Current production host: VPS systemd service `genbot.service`
+- Deployment status checked on 2026-05-12: service active, Telegram `getWebhookInfo` returned `pending_update_count=0` and no last error
+- GitHub repository: `https://github.com/TS-mfon/genbot`
 
 ## Setup
 

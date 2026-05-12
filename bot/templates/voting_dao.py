@@ -1,106 +1,121 @@
 """Voting DAO template contract for GenLayer."""
 
-VOTING_DAO_CODE = '''from genlayer import *
+VOTING_DAO_CODE = '''# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+from genlayer import *
 
 
-@gl.contract
-class VotingDAO:
-    """A decentralized voting system with proposal creation,
-    voting, and automatic tallying."""
+class VotingDAO(gl.Contract):
+    """DAO voting with typed storage and flat indexes."""
 
-    proposals: TreeMap[str, dict]
+    admin: Address
     proposal_count: u256
     members: TreeMap[str, bool]
-    admin: Address
+    proposal_titles: TreeMap[str, str]
+    proposal_descriptions: TreeMap[str, str]
+    proposal_creators: TreeMap[str, str]
+    proposal_open: TreeMap[str, bool]
+    proposal_option_count: TreeMap[str, u256]
+    proposal_options: TreeMap[str, str]
+    vote_counts: TreeMap[str, u256]
+    voter_choices: TreeMap[str, str]
 
     def __init__(self):
-        self.admin = gl.message.sender
+        self.admin = gl.message.sender_account
         self.proposal_count = u256(0)
-        self.proposals = TreeMap[str, dict]()
-        self.members = TreeMap[str, bool]()
-        self.members[str(gl.message.sender)] = True
+        self.members[str(gl.message.sender_account)] = True
+
+    def _option_key(self, proposal_id: str, option_index: int) -> str:
+        return proposal_id + "|" + str(option_index)
+
+    def _vote_count_key(self, proposal_id: str, option: str) -> str:
+        return proposal_id + "|" + option
+
+    def _voter_key(self, proposal_id: str, voter: str) -> str:
+        return proposal_id + "|" + voter
 
     @gl.public.write
-    def add_member(self, member_address: str) -> str:
-        """Add a new DAO member (admin only)."""
-        if gl.message.sender != self.admin:
-            return "Only admin can add members"
+    def add_member(self, member_address: str) -> None:
+        if gl.message.sender_account != self.admin:
+            raise gl.vm.UserError("[EXPECTED] Only admin can add members")
         self.members[member_address] = True
-        return f"Member {member_address} added"
 
     @gl.public.write
-    def create_proposal(self, title: str, description: str, options: list[str]) -> str:
-        """Create a new proposal for voting."""
-        sender = str(gl.message.sender)
+    def create_proposal(self, title: str, description: str, options_csv: str) -> str:
+        sender = str(gl.message.sender_account)
         if not self.members.get(sender, False):
-            return "Only members can create proposals"
+            raise gl.vm.UserError("[EXPECTED] Only members can create proposals")
 
-        proposal_id = str(self.proposal_count)
+        options = [item.strip() for item in options_csv.split(",") if item.strip()]
+        if len(options) < 2:
+            raise gl.vm.UserError("[EXPECTED] Provide at least two comma-separated options")
+
+        proposal_id = str(int(self.proposal_count))
         self.proposal_count += u256(1)
+        self.proposal_titles[proposal_id] = title
+        self.proposal_descriptions[proposal_id] = description
+        self.proposal_creators[proposal_id] = sender
+        self.proposal_open[proposal_id] = True
+        self.proposal_option_count[proposal_id] = u256(len(options))
 
-        self.proposals[proposal_id] = {
-            "title": title,
-            "description": description,
-            "options": options,
-            "votes": {},
-            "vote_counts": {opt: 0 for opt in options},
-            "creator": sender,
-            "open": True,
-        }
-        return f"Proposal {proposal_id} created: {title}"
+        for index, option in enumerate(options):
+            self.proposal_options[self._option_key(proposal_id, index)] = option
+            self.vote_counts[self._vote_count_key(proposal_id, option)] = u256(0)
+
+        return proposal_id
 
     @gl.public.write
-    def vote(self, proposal_id: str, option: str) -> str:
-        """Cast a vote on a proposal."""
-        sender = str(gl.message.sender)
+    def vote(self, proposal_id: str, option: str) -> None:
+        sender = str(gl.message.sender_account)
         if not self.members.get(sender, False):
-            return "Only members can vote"
+            raise gl.vm.UserError("[EXPECTED] Only members can vote")
+        if not self.proposal_open.get(proposal_id, False):
+            raise gl.vm.UserError("[EXPECTED] Voting is closed")
+        if self.voter_choices.get(self._voter_key(proposal_id, sender), "") != "":
+            raise gl.vm.UserError("[EXPECTED] You have already voted")
+        if not self.option_exists(proposal_id, option):
+            raise gl.vm.UserError("[EXPECTED] Invalid option")
 
-        proposal = self.proposals[proposal_id]
-        if not proposal["open"]:
-            return "Voting is closed"
-        if option not in proposal["options"]:
-            return f"Invalid option. Choose from: {proposal['options']}"
-        if sender in proposal["votes"]:
-            return "You have already voted"
-
-        proposal["votes"][sender] = option
-        proposal["vote_counts"][option] += 1
-        self.proposals[proposal_id] = proposal
-        return f"Vote recorded: {option}"
+        self.voter_choices[self._voter_key(proposal_id, sender)] = option
+        count_key = self._vote_count_key(proposal_id, option)
+        self.vote_counts[count_key] = self.vote_counts.get(count_key, u256(0)) + u256(1)
 
     @gl.public.write
-    def close_proposal(self, proposal_id: str) -> str:
-        """Close voting on a proposal and tally results."""
-        proposal = self.proposals[proposal_id]
-        if str(gl.message.sender) != proposal["creator"] and gl.message.sender != self.admin:
-            return "Only creator or admin can close proposals"
+    def close_proposal(self, proposal_id: str) -> None:
+        sender = str(gl.message.sender_account)
+        creator = self.proposal_creators.get(proposal_id, "")
+        if sender != creator and gl.message.sender_account != self.admin:
+            raise gl.vm.UserError("[EXPECTED] Only creator or admin can close proposals")
+        self.proposal_open[proposal_id] = False
 
-        proposal["open"] = False
-        self.proposals[proposal_id] = proposal
-
-        counts = proposal["vote_counts"]
-        winner = max(counts, key=counts.get) if counts else "No votes"
-        return f"Proposal closed. Winner: {winner} ({counts.get(winner, 0)} votes)"
+    @gl.public.view
+    def option_exists(self, proposal_id: str, option: str) -> bool:
+        option_count = int(self.proposal_option_count.get(proposal_id, u256(0)))
+        for index in range(option_count):
+            if self.proposal_options.get(self._option_key(proposal_id, index), "") == option:
+                return True
+        return False
 
     @gl.public.view
     def get_proposal(self, proposal_id: str) -> dict:
-        """Get proposal details and current vote counts."""
-        return self.proposals[proposal_id]
+        options = []
+        counts = {}
+        option_count = int(self.proposal_option_count.get(proposal_id, u256(0)))
+        for index in range(option_count):
+            option = self.proposal_options.get(self._option_key(proposal_id, index), "")
+            options.append(option)
+            counts[option] = int(self.vote_counts.get(self._vote_count_key(proposal_id, option), u256(0)))
 
-    @gl.public.view
-    def get_results(self, proposal_id: str) -> dict:
-        """Get voting results for a proposal."""
-        proposal = self.proposals[proposal_id]
         return {
-            "title": proposal["title"],
-            "vote_counts": proposal["vote_counts"],
-            "total_votes": len(proposal["votes"]),
-            "open": proposal["open"],
+            "id": proposal_id,
+            "title": self.proposal_titles.get(proposal_id, ""),
+            "description": self.proposal_descriptions.get(proposal_id, ""),
+            "creator": self.proposal_creators.get(proposal_id, ""),
+            "open": self.proposal_open.get(proposal_id, False),
+            "options": options,
+            "vote_counts": counts,
         }
 
     @gl.public.view
-    def is_member(self, address: str) -> bool:
-        """Check if an address is a DAO member."""
-        return self.members.get(address, False)
+    def is_member(self, account: str) -> bool:
+        return self.members.get(account, False)
 '''

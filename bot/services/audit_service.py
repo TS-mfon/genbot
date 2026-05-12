@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 AUDIT_PROMPT = """You are an expert auditor for GenLayer Intelligent Contracts.
 GenLayer contracts are Python classes that use `from genlayer import *` and can include
-non-deterministic operations via EquivalencePrinciple for validator consensus.
+non-deterministic operations via `gl.vm.run_nondet_unsafe` with explicit validator logic.
 
 Analyze the following contract code and provide:
 
@@ -85,8 +85,14 @@ class AuditService:
         if "@public" not in code and "def " in code:
             info.append("No @public decorator found - ensure methods are properly exposed.")
 
-        if "EquivalencePrinciple" in code:
-            info.append("Uses EquivalencePrinciple for non-deterministic consensus.")
+        if "EquivalencePrinciple" in code or "@gl.contract" in code:
+            issues.append(
+                "Outdated GenLayer SDK pattern detected. Use `class MyContract(gl.Contract)` "
+                "and `gl.vm.run_nondet_unsafe` with an explicit validator."
+            )
+
+        if "gl.vm.run_nondet_unsafe" in code:
+            info.append("Uses explicit validator logic for non-deterministic consensus.")
 
         if "__init__" not in code:
             info.append("No __init__ constructor found.")
