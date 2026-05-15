@@ -39,6 +39,7 @@ from bot.handlers.ask import ask_handler, ask_address_handler, ask_query_handler
 from bot.handlers.contracts import contracts_handler
 from bot.handlers.doctor import doctor_handler
 from bot.handlers.examples import examples_handler
+from bot.handlers.health import health_handler, plain_text_handler, unknown_command_handler
 from bot.handlers.tx import tx_handler
 from bot.handlers.schema import schema_handler
 from bot.handlers.template import (
@@ -178,6 +179,7 @@ def main():
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("guide", guide_handler))
     app.add_handler(CommandHandler("examples", examples_handler))
+    app.add_handler(CommandHandler("health", health_handler))
     app.add_handler(CommandHandler("contracts", contracts_handler))
     app.add_handler(CommandHandler("doctor", doctor_handler))
     app.add_handler(CommandHandler("tx", tx_handler))
@@ -191,6 +193,8 @@ def main():
 
     # File upload handler (outside of conversation - catch-all for .py uploads)
     app.add_handler(MessageHandler(filters.Document.ALL, _standalone_file_upload))
+    app.add_handler(MessageHandler(filters.COMMAND, unknown_command_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, plain_text_handler))
     app.add_error_handler(error_handler)
 
     logger.info("GenBot starting...")

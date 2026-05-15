@@ -11,6 +11,7 @@ BOT_COMMANDS = [
     ("help", "Show the main overview"),
     ("guide", "Show exact input formats and examples"),
     ("examples", "Show copyable deploy/call/write examples"),
+    ("health", "Check bot and GenLayer CLI status"),
     ("network", "Switch GenLayer network"),
     ("deploy", "Deploy a GenLayer contract"),
     ("schema", "Inspect a deployed contract schema"),
@@ -43,6 +44,7 @@ Commands:
   /network    - Switch between StudioNet / Bradbury / Asimov
   /guide      - See exact input formats and examples
   /examples   - Copyable deploy/call/write examples
+  /health     - Check bot and GenLayer CLI status
   /doctor     - Diagnose contract/network/schema issues
   /help       - Show this help message
 
