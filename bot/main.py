@@ -47,6 +47,7 @@ from bot.handlers.audit import audit_handler, audit_code_handler, AUDIT_STATE
 from bot.handlers.validators import validators_handler
 from bot.handlers.network import network_command, network_callback
 from bot.handlers.password import password_handler, password_receive_handler, PASSWORD_STATE
+from bot.utils.errors import error_handler
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -181,6 +182,7 @@ def main():
 
     # File upload handler (outside of conversation - catch-all for .py uploads)
     app.add_handler(MessageHandler(filters.Document.ALL, _standalone_file_upload))
+    app.add_error_handler(error_handler)
 
     logger.info("GenBot starting...")
     webhook_base = settings.webhook_base_url.strip() or os.environ.get("RENDER_EXTERNAL_URL", "").strip()
