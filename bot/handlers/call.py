@@ -8,6 +8,8 @@ from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.services.genlayer_rpc import genlayer_rpc
+from bot.services.contract_registry import contract_registry
+from bot.services.genlayer_errors import render_cli_error_html
 from bot.services.wallet_service import wallet_service
 from bot.utils.rate_limit import rate_limited
 
@@ -162,6 +164,19 @@ async def call_address_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["contract_address"] = address
     mode = context.user_data.get("rpc_mode", "call")
     action = "read" if mode == "call" else "write"
+    network = context.user_data.get("network", "studionet")
+    registered = await contract_registry.get_contract_by_address(address)
+
+    if registered and registered.get("network") and registered["network"] != network:
+        await update.message.reply_text(
+            "⚠️ <b>This contract was saved under a different network.</b>\n\n"
+            f"Saved network: <code>{registered['network']}</code>\n"
+            f"Current network: <code>{network}</code>\n\n"
+            "If you call it on the wrong network, GenLayer may say "
+            "<b>Contract not found</b> even when the explorer shows the address.\n\n"
+            "Use /network to switch, then retry this call.",
+            parse_mode="HTML",
+        )
 
     await update.message.reply_text(
         f"Contract: <code>{address}</code>\n\n"
@@ -169,6 +184,7 @@ async def call_address_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         f"<b>Format:</b> <code>method_name(arg1, arg2, ...)</code>\n\n"
         f"<b>Examples:</b>\n"
         f"• <code>get_count()</code>\n"
+        f"• <code>get_state()</code>\n"
         f"• <code>get_balance(\"0xabc...\")</code>\n"
         f"• <code>increment(42)</code>\n\n"
         f"<i>Args are parsed as JSON. Bare words are auto-quoted as strings.</i>",
@@ -222,7 +238,18 @@ async def call_method_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
 
         if result.get("error"):
-            await update.message.reply_text(f"❌ RPC Error:\n<pre>{result['error'][:1000]}</pre>", parse_mode="HTML")
+            await update.message.reply_text(
+                render_cli_error_html(
+                    operation="read" if mode == "call" else "write",
+                    stdout=result.get("stdout", ""),
+                    stderr=result.get("stderr", result.get("error", "")),
+                    returncode=result.get("returncode"),
+                    address=address,
+                    method=method_name,
+                    network=network,
+                ),
+                parse_mode="HTML",
+            )
         else:
             data = result.get("result", result)
             text = json.dumps(data, indent=2, default=str) if not isinstance(data, str) else data

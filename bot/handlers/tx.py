@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from bot.services.genlayer_rpc import genlayer_rpc
+from bot.services.genlayer_errors import render_cli_error_html
 
 
 async def tx_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -25,7 +26,14 @@ async def tx_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         if result.get("error"):
             await update.message.reply_text(
-                f"❌ Transaction lookup failed:\n<pre>{result['error']}</pre>",
+                render_cli_error_html(
+                    operation="transaction lookup",
+                    stdout=result.get("stdout", ""),
+                    stderr=result.get("stderr", result.get("error", "")),
+                    returncode=result.get("returncode"),
+                    tx_hash=tx_hash,
+                    network=network,
+                ),
                 parse_mode="HTML",
             )
             return

@@ -40,10 +40,24 @@ async def init_db() -> None:
             address TEXT NOT NULL,
             code_snippet TEXT DEFAULT '',
             tx_hash TEXT DEFAULT '',
+            network TEXT DEFAULT 'studionet',
+            constructor_args TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'unknown',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         )
     """)
+
+    for column, ddl in (
+        ("network", "ALTER TABLE contracts ADD COLUMN network TEXT DEFAULT 'studionet'"),
+        ("constructor_args", "ALTER TABLE contracts ADD COLUMN constructor_args TEXT DEFAULT '[]'"),
+        ("status", "ALTER TABLE contracts ADD COLUMN status TEXT DEFAULT 'unknown'"),
+    ):
+        try:
+            await _db.execute(ddl)
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     await _db.execute("""
         CREATE INDEX IF NOT EXISTS idx_contracts_user_id ON contracts(user_id)

@@ -23,7 +23,10 @@ async def contracts_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     for i, c in enumerate(contracts, 1):
         lines.append(
             f"{i}. `{c['address']}`\n"
+            f"   Network: `{c.get('network', 'studionet')}`\n"
+            f"   Status: `{c.get('status', 'unknown')}`\n"
             f"   TX: `{c['tx_hash']}`\n"
+            f"   Args: `{c.get('constructor_args', '[]')}`\n"
             f"   Code: {c['code_snippet']}\n"
         )
 

@@ -1,6 +1,8 @@
 """Deploy contract handler - supports file upload and text paste."""
 
 import ast
+import html
+import json
 import logging
 import re
 
@@ -9,12 +11,15 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from bot.services.genlayer_rpc import genlayer_rpc
 from bot.services.contract_registry import contract_registry
+from bot.services.genlayer_errors import render_cli_error_html
 from bot.services.wallet_service import wallet_service
 from bot.utils.rate_limit import rate_limited
+from bot.handlers.call import _parse_args
 
 logger = logging.getLogger(__name__)
 
 DEPLOY_STATE = 10
+DEPLOY_ARGS_STATE = 11
 MAX_CONTRACT_SIZE = 200_000  # 200KB
 GENLAYER_DEPENDS_HEADER = '# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }'
 _DEPENDS_RE = re.compile(r'^\s*#?\s*\{\s*"Depends"\s*:\s*"py-genlayer:[^"]+"\s*\}\s*\n?', re.I)
@@ -50,6 +55,33 @@ def contract_guidance_warnings(code: str) -> list[str]:
         warnings.append("Use <code>gl.vm.UserError</code> with expected/transient error prefixes instead of bare exceptions.")
 
     return warnings
+
+
+def _constructor_params(code: str) -> list[str]:
+    """Return required constructor params excluding self."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            is_contract = any(
+                isinstance(base, ast.Attribute)
+                and isinstance(base.value, ast.Name)
+                and base.value.id == "gl"
+                and base.attr == "Contract"
+                for base in node.bases
+            )
+            if not is_contract:
+                continue
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                    args = item.args.args[1:]  # skip self
+                    default_count = len(item.args.defaults)
+                    required_count = max(0, len(args) - default_count)
+                    return [arg.arg for arg in args[:required_count]]
+    return []
 
 
 @rate_limited
@@ -115,7 +147,10 @@ async def deploy_code_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def _validate_and_deploy(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, code: str
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    code: str,
+    deploy_args: list | None = None,
 ) -> int:
     user_id = update.effective_user.id
 
@@ -157,6 +192,35 @@ async def _validate_and_deploy(
         return DEPLOY_STATE
 
     network = context.user_data.get("network", "studionet")
+    required_ctor_args = _constructor_params(code)
+    if required_ctor_args and deploy_args is None:
+        context.user_data["pending_deploy_code"] = code
+        context.user_data["pending_deploy_warnings"] = warnings
+        context.user_data["pending_deploy_network"] = network
+        example_values = []
+        for name in required_ctor_args:
+            if "label" in name.lower() or "name" in name.lower():
+                example_values.append('"Demo counter"')
+            elif "amount" in name.lower() or "supply" in name.lower() or "count" in name.lower():
+                example_values.append("100")
+            elif "enabled" in name.lower() or name.lower().startswith("is_"):
+                example_values.append("true")
+            else:
+                example_values.append(f'"example_{name}"')
+        await update.message.reply_text(
+            "🧩 <b>This contract needs constructor arguments before deployment.</b>\n\n"
+            f"Required value(s): <code>{html.escape(', '.join(required_ctor_args))}</code>\n\n"
+            "Send the values only, comma-separated, using JSON-style formatting.\n\n"
+            "<b>Example for this contract:</b>\n"
+            f"<code>{html.escape(', '.join(example_values))}</code>\n\n"
+            "<b>StorageCounter example:</b>\n"
+            "<code>\"Demo counter\"</code>\n\n"
+            "Send /cancel to abort.",
+            parse_mode="HTML",
+        )
+        return DEPLOY_ARGS_STATE
+
+    deploy_args = deploy_args or []
 
     await update.message.reply_text(
         f"✅ Code validated.\n\n"
@@ -179,6 +243,7 @@ async def _validate_and_deploy(
             user_id=user_id,
             private_key=wallet["private_key"],
             network=network,
+            args=deploy_args,
         )
 
         if result.get("success"):
@@ -186,12 +251,22 @@ async def _validate_and_deploy(
             tx = result.get("tx_hash", "")
 
             if addr:
+                readiness = "unknown"
+                schema_check = await genlayer_rpc.get_schema(addr, network=network)
+                if schema_check.get("error"):
+                    readiness = "finalizing"
+                else:
+                    readiness = "ready"
+
                 try:
                     await contract_registry.register_contract(
                         user_id=user_id,
                         contract_address=addr,
                         code_snippet=code[:200],
                         tx_hash=tx,
+                        network=network,
+                        constructor_args=deploy_args,
+                        status=readiness,
                     )
                 except Exception:
                     logger.exception("registry save failed (non-fatal)")
@@ -200,10 +275,19 @@ async def _validate_and_deploy(
                     f"🎉 <b>Contract Deployed!</b>\n\n"
                     f"Address: <code>{addr}</code>\n"
                     f"Network: {network}\n"
+                    f"Constructor args: <code>{html.escape(json.dumps(deploy_args))}</code>\n"
+                    f"Status: <b>{readiness}</b>\n"
                 )
                 if tx:
                     msg += f"Tx: <code>{tx}</code>\n"
-                msg += "\nUse /call or /write to interact with it."
+                msg += (
+                    "\n<b>Next steps</b>\n"
+                    f"1. Run <code>/schema {addr}</code>\n"
+                    f"2. Use <code>/call</code> → paste address → <code>get_state()</code> or another view method\n"
+                    f"3. Use <code>/write</code> only for state-changing methods\n\n"
+                    "If schema/call says not found, wait 1-2 minutes or run "
+                    f"<code>/doctor {addr}</code>."
+                )
 
                 await update.message.reply_text(msg, parse_mode="HTML")
             else:
@@ -213,9 +297,14 @@ async def _validate_and_deploy(
                     parse_mode="HTML",
                 )
         else:
-            err = result.get("error", "Unknown error")
             await update.message.reply_text(
-                f"❌ <b>Deployment failed:</b>\n<pre>{err[:1500]}</pre>",
+                render_cli_error_html(
+                    operation="deployment",
+                    stdout=result.get("stdout", ""),
+                    stderr=result.get("stderr", result.get("error", "")),
+                    returncode=result.get("returncode"),
+                    network=network,
+                ),
                 parse_mode="HTML",
             )
     except Exception as e:
@@ -223,3 +312,34 @@ async def _validate_and_deploy(
         await update.message.reply_text(f"❌ Error: {str(e)[:500]}")
 
     return ConversationHandler.END
+
+
+async def deploy_args_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive constructor args for a pending deployment."""
+    raw = update.message.text.strip()
+    code = context.user_data.get("pending_deploy_code")
+    if not code:
+        await update.message.reply_text("No pending deployment found. Use /deploy to start again.")
+        return ConversationHandler.END
+
+    if raw.lower() in {"none", "no args", "no_args", "[]"}:
+        deploy_args = []
+    else:
+        try:
+            deploy_args = _parse_args(raw)
+        except ValueError as exc:
+            await update.message.reply_text(
+                "❌ <b>Constructor args could not be parsed.</b>\n\n"
+                f"{html.escape(str(exc))}\n\n"
+                "<b>Examples</b>\n"
+                "<code>\"Demo counter\"</code>\n"
+                "<code>\"Token\", \"TKN\", 1000</code>\n"
+                "<code>42, true, \"hello\"</code>",
+                parse_mode="HTML",
+            )
+            return DEPLOY_ARGS_STATE
+
+    context.user_data.pop("pending_deploy_code", None)
+    context.user_data.pop("pending_deploy_warnings", None)
+    context.user_data.pop("pending_deploy_network", None)
+    return await _validate_and_deploy(update, context, code, deploy_args=deploy_args)

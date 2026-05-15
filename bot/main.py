@@ -24,7 +24,9 @@ from bot.handlers.deploy import (
     deploy_handler,
     deploy_code_handler,
     deploy_file_handler,
+    deploy_args_handler,
     DEPLOY_STATE,
+    DEPLOY_ARGS_STATE,
 )
 from bot.handlers.call import (
     call_handler,
@@ -35,6 +37,8 @@ from bot.handlers.call import (
 )
 from bot.handlers.ask import ask_handler, ask_address_handler, ask_query_handler, ASK_STATE
 from bot.handlers.contracts import contracts_handler
+from bot.handlers.doctor import doctor_handler
+from bot.handlers.examples import examples_handler
 from bot.handlers.tx import tx_handler
 from bot.handlers.schema import schema_handler
 from bot.handlers.template import (
@@ -65,6 +69,9 @@ def build_conversation_handlers():
             DEPLOY_STATE: [
                 MessageHandler(filters.Document.ALL, deploy_file_handler),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, deploy_code_handler),
+            ],
+            DEPLOY_ARGS_STATE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, deploy_args_handler),
             ],
         },
         fallbacks=[CommandHandler("cancel", start_handler)],
@@ -170,7 +177,9 @@ def main():
     app.add_handler(CommandHandler("commands", commands_handler))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("guide", guide_handler))
+    app.add_handler(CommandHandler("examples", examples_handler))
     app.add_handler(CommandHandler("contracts", contracts_handler))
+    app.add_handler(CommandHandler("doctor", doctor_handler))
     app.add_handler(CommandHandler("tx", tx_handler))
     app.add_handler(CommandHandler("schema", schema_handler))
     app.add_handler(CommandHandler("validators", validators_handler))

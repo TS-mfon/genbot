@@ -10,12 +10,14 @@ BOT_COMMANDS = [
     ("commands", "List available bot commands"),
     ("help", "Show the main overview"),
     ("guide", "Show exact input formats and examples"),
+    ("examples", "Show copyable deploy/call/write examples"),
     ("network", "Switch GenLayer network"),
     ("deploy", "Deploy a GenLayer contract"),
     ("schema", "Inspect a deployed contract schema"),
     ("call", "Read from a deployed contract"),
     ("write", "Write to a deployed contract"),
     ("contracts", "List your deployed contracts"),
+    ("doctor", "Diagnose contract call/deploy issues"),
     ("tx", "Inspect a transaction receipt"),
     ("template", "Get starter contract templates"),
     ("audit", "Audit contract code"),
@@ -40,6 +42,8 @@ Commands:
   /validators - View validator status
   /network    - Switch between StudioNet / Bradbury / Asimov
   /guide      - See exact input formats and examples
+  /examples   - Copyable deploy/call/write examples
+  /doctor     - Diagnose contract/network/schema issues
   /help       - Show this help message
 
 Best flow:

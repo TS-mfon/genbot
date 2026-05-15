@@ -1,0 +1,7 @@
+[Unit]
+Description=Update GenLayer CLI for GenBot
+
+[Service]
+Type=oneshot
+Environment=GENBOT_SERVICE_NAME=genbot
+ExecStart=/opt/bots/genbot/scripts/update_genlayer_cli.sh

@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from bot.services.genlayer_rpc import genlayer_rpc
+from bot.services.genlayer_errors import render_cli_error_html
 
 
 async def schema_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -26,7 +27,17 @@ async def schema_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     result = await genlayer_rpc.get_schema(address, network=network)
     if result.get("error"):
-        await update.message.reply_text(f"❌ Schema lookup failed:\n<pre>{result['error']}</pre>", parse_mode="HTML")
+        await update.message.reply_text(
+            render_cli_error_html(
+                operation="schema lookup",
+                stdout=result.get("stdout", ""),
+                stderr=result.get("stderr", result.get("error", "")),
+                returncode=result.get("returncode"),
+                address=address,
+                network=network,
+            ),
+            parse_mode="HTML",
+        )
         return
 
     schema = result.get("result", "")

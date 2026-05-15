@@ -66,6 +66,7 @@ class GenLayerClient:
 
     def __init__(self):
         self.rpc_url = settings.genlayer_rpc_url
+        self._cli_lock = asyncio.Lock()
 
     def resolve_network(self, name: str) -> str:
         return NETWORK_ALIASES.get(name, "studionet")
@@ -158,32 +159,40 @@ class GenLayerClient:
         if not code_stripped.startswith('# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }'):
             code = '# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }\n' + code_stripped
 
-        # 1. Select network
-        await self.set_network(network)
-
-        # 2. Import + unlock the user's account
-        try:
-            await self.ensure_account(user_id, private_key)
-        except Exception as e:
-            return {"success": False, "error": f"Failed to prepare account: {e}"}
-
-        # 3. Write code to temp file and deploy
+        # Write code to temp file and deploy. All CLI commands that depend on
+        # global network/account state are serialized to avoid cross-user races.
         fd, temp_path = tempfile.mkstemp(suffix=".py", prefix="contract_")
         try:
             with os.fdopen(fd, "w") as f:
                 f.write(code)
 
-            cmd = ["genlayer", "deploy", "--contract", temp_path]
-            if args:
-                cmd.append("--args")
-                cmd.extend(str(a) for a in args)
+            async with self._cli_lock:
+                # 1. Select network
+                await self.set_network(network)
 
-            logger.info("Deploying user=%s via CLI", user_id)
-            # Pipe the keystore password to stdin in case the CLI prompts
-            # (happens on fresh containers without an OS keychain, e.g. Render).
-            # Feed it 3 times because the CLI allows 3 password attempts.
-            pw_stdin = (_KEYSTORE_PASSWORD + "\n") * 3
-            proc = await _run(cmd, timeout=180, stdin_input=pw_stdin)
+                # 2. Import + unlock the user's account
+                try:
+                    await self.ensure_account(user_id, private_key)
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "error": f"Failed to prepare account: {e}",
+                        "returncode": 1,
+                        "stdout": "",
+                        "stderr": str(e),
+                    }
+
+                cmd = ["genlayer", "deploy", "--contract", temp_path]
+                if args:
+                    cmd.append("--args")
+                    cmd.extend(self._format_cli_arg(a) for a in args)
+
+                logger.info("Deploying user=%s via CLI", user_id)
+                # Pipe the keystore password to stdin in case the CLI prompts
+                # (happens on fresh containers without an OS keychain, e.g. Render).
+                # Feed it 3 times because the CLI allows 3 password attempts.
+                pw_stdin = (_KEYSTORE_PASSWORD + "\n") * 3
+                proc = await _run(cmd, timeout=180, stdin_input=pw_stdin)
 
             output = proc.stdout or ""
             stderr = proc.stderr or ""
@@ -205,6 +214,9 @@ class GenLayerClient:
                     "address": addr_match.group(1),
                     "tx_hash": tx_match.group(1) if tx_match else "",
                     "output": combined[-500:],
+                    "returncode": proc.returncode,
+                    "stdout": output,
+                    "stderr": stderr,
                 }
 
             # Fallback: any 0x40 hex in output when the output clearly indicates success
@@ -215,22 +227,40 @@ class GenLayerClient:
                     "address": any_addr.group(1),
                     "tx_hash": tx_match.group(1) if tx_match else "",
                     "output": combined[-500:],
+                    "returncode": proc.returncode,
+                    "stdout": output,
+                    "stderr": stderr,
                 }
 
             # Non-zero exit code or no address = failure
             err_body = stderr or output or "No contract address in CLI output"
-            return {"success": False, "error": err_body[-1500:]}
+            return {
+                "success": False,
+                "error": err_body[-1500:],
+                "returncode": proc.returncode,
+                "stdout": output,
+                "stderr": stderr,
+            }
 
         except subprocess.TimeoutExpired:
-            return {"success": False, "error": "Deploy timed out after 180s"}
+            return {
+                "success": False,
+                "error": "Deploy timed out after 180s",
+                "returncode": 124,
+                "stdout": "",
+                "stderr": "Deploy timed out after 180s",
+            }
         except FileNotFoundError:
             return {
                 "success": False,
                 "error": "genlayer CLI not found. Install with: npm install -g genlayer",
+                "returncode": 127,
+                "stdout": "",
+                "stderr": "genlayer CLI not found. Install with: npm install -g genlayer",
             }
         except Exception as e:
             logger.exception("Deploy error")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": str(e), "returncode": 1, "stdout": "", "stderr": str(e)}
         finally:
             try:
                 os.unlink(temp_path)
@@ -247,16 +277,22 @@ class GenLayerClient:
         network: str = "studionet",
     ) -> dict[str, Any]:
         """Read from a contract via `genlayer call` (no signing needed)."""
-        await self.set_network(network)
+        async with self._cli_lock:
+            await self.set_network(network)
 
-        cmd = ["genlayer", "call", contract_address, method]
-        if args:
-            cmd.append("--args")
-            cmd.extend(self._format_cli_arg(a) for a in args)
+            cmd = ["genlayer", "call", contract_address, method]
+            if args:
+                cmd.append("--args")
+                cmd.extend(self._format_cli_arg(a) for a in args)
 
-        proc = await _run(cmd, timeout=60)
+            proc = await _run(cmd, timeout=60)
         if proc.returncode != 0:
-            return {"error": (proc.stderr or proc.stdout)[-800:]}
+            return {
+                "error": (proc.stderr or proc.stdout)[-1800:],
+                "returncode": proc.returncode,
+                "stdout": proc.stdout or "",
+                "stderr": proc.stderr or "",
+            }
 
         output = proc.stdout or ""
         m = re.search(r"Result:\s*(\{.*\}|\[.*\]|\".*\"|\d+|true|false|null)", output, re.DOTALL)
@@ -277,22 +313,33 @@ class GenLayerClient:
         network: str = "studionet",
     ) -> dict[str, Any]:
         """Write tx via `genlayer write`. Requires per-user account setup."""
-        await self.set_network(network)
-        try:
-            await self.ensure_account(user_id, private_key)
-        except Exception as e:
-            return {"error": f"Account setup failed: {e}"}
+        async with self._cli_lock:
+            await self.set_network(network)
+            try:
+                await self.ensure_account(user_id, private_key)
+            except Exception as e:
+                return {
+                    "error": f"Account setup failed: {e}",
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": str(e),
+                }
 
-        cmd = ["genlayer", "write", contract_address, method]
-        if args:
-            cmd.append("--args")
-            cmd.extend(self._format_cli_arg(a) for a in args)
+            cmd = ["genlayer", "write", contract_address, method]
+            if args:
+                cmd.append("--args")
+                cmd.extend(self._format_cli_arg(a) for a in args)
 
-        # Pipe password on stdin in case CLI prompts (Render has no OS keychain)
-        pw_stdin = (_KEYSTORE_PASSWORD + "\n") * 3
-        proc = await _run(cmd, timeout=120, stdin_input=pw_stdin)
+            # Pipe password on stdin in case CLI prompts (Render has no OS keychain)
+            pw_stdin = (_KEYSTORE_PASSWORD + "\n") * 3
+            proc = await _run(cmd, timeout=120, stdin_input=pw_stdin)
         if proc.returncode != 0:
-            return {"error": (proc.stderr or proc.stdout)[-800:]}
+            return {
+                "error": (proc.stderr or proc.stdout)[-1800:],
+                "returncode": proc.returncode,
+                "stdout": proc.stdout or "",
+                "stderr": proc.stderr or "",
+            }
 
         tx_match = re.search(r"(?:Transaction Hash|tx_hash)['\":]*\s*['\"]?(0x[a-fA-F0-9]+)", proc.stdout or "", re.IGNORECASE)
         return {
@@ -301,24 +348,51 @@ class GenLayerClient:
         }
 
     async def get_code(self, contract_address: str, network: str = "studionet") -> str:
-        await self.set_network(network)
-        proc = await _run(["genlayer", "code", contract_address], timeout=30)
+        async with self._cli_lock:
+            await self.set_network(network)
+            proc = await _run(["genlayer", "code", contract_address], timeout=30)
         return proc.stdout if proc.returncode == 0 else ""
 
     async def get_schema(self, contract_address: str, network: str = "studionet") -> dict[str, Any]:
         """Read deployed contract schema via the CLI."""
-        await self.set_network(network)
-        proc = await _run(["genlayer", "schema", contract_address], timeout=30)
+        async with self._cli_lock:
+            await self.set_network(network)
+            proc = await _run(["genlayer", "schema", contract_address], timeout=30)
         if proc.returncode != 0:
-            return {"error": (proc.stderr or proc.stdout or "schema failed")[-1000:]}
+            return {
+                "error": (proc.stderr or proc.stdout or "schema failed")[-1800:],
+                "returncode": proc.returncode,
+                "stdout": proc.stdout or "",
+                "stderr": proc.stderr or "",
+            }
         return {"result": (proc.stdout or "").strip()}
 
     async def get_transaction(self, tx_hash: str, network: str = "studionet") -> dict[str, Any]:
         """Inspect a transaction via `genlayer receipt`."""
-        await self.set_network(network)
-        proc = await _run(["genlayer", "receipt", tx_hash], timeout=90)
+        async with self._cli_lock:
+            await self.set_network(network)
+            proc = await _run(["genlayer", "receipt", tx_hash], timeout=90)
         if proc.returncode != 0:
-            return {"error": (proc.stderr or proc.stdout or "receipt failed")[-1500:]}
+            return {
+                "error": (proc.stderr or proc.stdout or "receipt failed")[-1800:],
+                "returncode": proc.returncode,
+                "stdout": proc.stdout or "",
+                "stderr": proc.stderr or "",
+            }
+        return {"result": (proc.stdout or "").strip()}
+
+    async def get_trace(self, tx_hash: str, network: str = "studionet") -> dict[str, Any]:
+        """Inspect a transaction execution trace via `genlayer trace`."""
+        async with self._cli_lock:
+            await self.set_network(network)
+            proc = await _run(["genlayer", "trace", tx_hash], timeout=90)
+        if proc.returncode != 0:
+            return {
+                "error": (proc.stderr or proc.stdout or "trace failed")[-1800:],
+                "returncode": proc.returncode,
+                "stdout": proc.stdout or "",
+                "stderr": proc.stderr or "",
+            }
         return {"result": (proc.stdout or "").strip()}
 
     # ---------------- RPC fallback ----------------

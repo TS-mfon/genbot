@@ -11,6 +11,8 @@ A production-grade Telegram bot for deploying and interacting with GenLayer Inte
 - `/schema <address>` — Inspect deployed methods before interacting
 - `/ask <address> <question>` — Natural language query
 - `/contracts` — List your deployed contracts
+- `/doctor <address>` — Diagnose network/schema/finalization issues
+- `/examples` — Copyable deploy/call/write examples with real values
 - `/tx <hash>` — Look up a transaction
 - `/template` — Get starter contract templates
 - `/audit <address|code>` — AI audit via Claude API
@@ -74,10 +76,12 @@ All included templates pass GenVM lint and validation against the pinned depende
 1. User uploads a `.py` file or pastes code
 2. Bot validates Python syntax
 3. Bot auto-prepends header if missing
-4. Bot writes code to temp file
-5. Bot runs `genlayer network set <network>` then `genlayer deploy --contract <path>`
-6. Bot parses contract address from output
-7. Bot stores contract in user's registry
+4. Bot detects required constructor args such as `label`
+5. Bot asks for constructor args when needed, for example `"Demo counter"`
+6. Bot writes code to temp file
+7. Bot runs `genlayer network set <network>` then `genlayer deploy --contract <path> --args ...`
+8. Bot parses contract address from output
+9. Bot checks schema readiness and stores address, tx, network, constructor args, and status
 
 For contract interaction, the bot aligns with the installed CLI structure:
 
@@ -90,6 +94,17 @@ genlayer receipt <txHash>
 
 Use `/guide` inside Telegram to see the supported argument formats and copyable examples.
 
+## Error Handling
+
+GenBot translates raw CLI failures into guided recovery steps. Examples:
+
+- `Contract ... not found` becomes a network/finalization diagnosis with `/network`, `/contracts`, `/schema`, and `/doctor` next steps.
+- `StorageCounter.__init__() missing ... label` becomes a constructor-argument guide with the exact value format to retry, e.g. `"Demo counter"`.
+- Bad method names or args point users to `/schema` and show valid examples like `get_state()`, `increment()`, and `rename("Demo counter")`.
+- Noisy CLI warnings such as deprecated `initializeConsensusSmartContract()` output are hidden from user replies but preserved in logs.
+
+Use `/doctor <address>` when a contract is visible in an explorer but not callable from the selected network.
+
 ## Production Features
 
 - Safe JSON arg parsing (no `ast.literal_eval`)
@@ -99,6 +114,8 @@ Use `/guide` inside Telegram to see the supported argument formats and copyable 
 - Multi-stage Docker build with Node.js + genlayer CLI pre-installed
 - Health endpoint on `/`
 - Fernet-encrypted private keys
+- Serialized GenLayer CLI commands to avoid global network/account race conditions
+- Weekly GenLayer CLI update script and systemd timer examples in `deploy/systemd`
 
 ## Live Bot and Deployment Evidence
 
