@@ -5,9 +5,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 """GenBot - GenLayer Telegram Bot entry point."""
 
 import logging
+import json
 
-from telegram import BotCommand
+from telegram import BotCommand, Update
 from telegram.ext import (
+    TypeHandler,
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
@@ -53,6 +55,14 @@ from bot.handlers.validators import validators_handler
 from bot.handlers.network import network_command, network_callback
 from bot.handlers.password import password_handler, password_receive_handler, PASSWORD_STATE
 from bot.utils.errors import error_handler
+from bot.utils.failover import (
+    degraded_runtime_notice_handler,
+    duplicate_guard_handler,
+    finalize_update_handler,
+    install_failover,
+    runtime_health_payload,
+    shutdown_failover,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -155,10 +165,15 @@ def build_conversation_handlers():
 async def post_init(application):
     """Initialize database after application starts."""
     await init_db()
+    await install_failover(application, "genbot", "GenBot")
     await application.bot.set_my_commands(
         [BotCommand(command, description) for command, description in BOT_COMMANDS]
     )
     logger.info("Database initialized.")
+
+
+async def post_shutdown(application):
+    await shutdown_failover(application)
 
 
 def main():
@@ -166,8 +181,12 @@ def main():
         ApplicationBuilder()
         .token(settings.telegram_bot_token)
         .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .build()
     )
+
+    app.add_handler(TypeHandler(Update, duplicate_guard_handler), group=-100)
+    app.add_handler(TypeHandler(Update, degraded_runtime_notice_handler), group=-90)
 
     # Conversation handlers (must be added before simple command handlers)
     for conv in build_conversation_handlers():
@@ -195,6 +214,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, _standalone_file_upload))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, plain_text_handler))
+    app.add_handler(TypeHandler(Update, finalize_update_handler), group=1000)
     app.add_error_handler(error_handler)
 
     logger.info("GenBot starting...")
@@ -232,8 +252,10 @@ async def _standalone_file_upload(update, context) -> None:
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b'{"status":"ok","bot":"genbot"}')
+        payload = runtime_health_payload("genbot", "GenBot")
+        self.wfile.write(json.dumps(payload).encode("utf-8"))
     def log_message(self, *args):
         pass
 

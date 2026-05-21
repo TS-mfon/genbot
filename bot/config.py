@@ -15,6 +15,9 @@ class Settings(BaseSettings):
         default="",
         description="Public HTTPS base URL used for Telegram webhooks on Render",
     )
+    runtime_origin: str = Field(default="vps", description="Runtime origin label")
+    backend_role: str = Field(default="primary", description="Backend role label")
+    redis_url: str = Field(default="", description="Optional Redis URL for update deduplication")
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
