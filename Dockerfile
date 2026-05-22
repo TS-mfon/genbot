@@ -43,6 +43,6 @@ ENV PATH=/home/botuser/.local/bin:$PATH \
 EXPOSE 10000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:10000/').read()" || exit 1
+    CMD python -c "import os, socket; s = socket.create_connection(('127.0.0.1', int(os.environ.get('PORT', '10000'))), 5); s.close()" || exit 1
 
 CMD ["genbot"]
